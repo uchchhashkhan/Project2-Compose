@@ -1,0 +1,46 @@
+version: "3.9"
+
+# Jenkins uses a sidecar Docker-in-Docker (DinD) engine via DOCKER_HOST.
+# This mirrors common CI setups without mounting the host docker.sock.
+services:
+  dind:
+    image: docker:24-dind
+    container_name: dind
+    privileged: true                      # needed for DinD
+    command: ["--host=tcp://0.0.0.0:2375","--storage-driver=overlay2"]
+    environment:
+      DOCKER_TLS_CERTDIR: ""              # disable TLS for local CI network only
+    networks: [ci]
+    volumes:
+      - docker-data:/var/lib/docker       # cache layers between builds
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  jenkins:
+    image: jenkins/jenkins:lts
+    container_name: jenkins
+    depends_on:
+      dind:
+        condition: service_healthy
+    user: root                            # so we can install docker CLI inside
+    environment:
+      DOCKER_HOST: tcp://dind:2375        # point Jenkins to the DinD daemon
+      # JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"   # (leave wizard ON first run)
+    ports:
+      - "8080:8080"                       # Jenkins Web UI
+      - "50000:50000"                     # inbound agents (optional)
+    networks: [ci]
+    volumes:
+      - jenkins_home:/var/jenkins_home    # persist Jenkins data
+      - ./init.groovy.d:/usr/share/jenkins/ref/init.groovy.d:ro  # security hardening (next step)
+
+volumes:
+  jenkins_home:
+  docker-data:
+
+networks:
+  ci:
+    driver: bridge
